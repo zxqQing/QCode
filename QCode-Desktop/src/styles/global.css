@@ -1,0 +1,35 @@
+:root {
+  --bg-app: #f4f5f7;
+  --bg-panel: #fafafa;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f7f8fa;
+  --bg-hover: #f1f2f4;
+  --bg-selected: #eef2f6;
+  --border-light: #e5e7eb;
+  --border-strong: #d6dae1;
+  --text-primary: #202124;
+  --text-secondary: #5f6368;
+  --text-muted: #8a9099;
+  --text-faint: #a8adb5;
+  --accent: #2f6fed;
+  --accent-soft: #e9f0ff;
+  --green: #267a4a;
+  --green-soft: #eaf7ef;
+  --red: #b43d3d;
+  --red-soft: #fff0f0;
+  --amber: #9a6b1d;
+  --amber-soft: #fff8e8;
+  --shadow-composer: 0 10px 36px rgba(31, 35, 41, .08), 0 2px 6px rgba(31, 35, 41, .05);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; }
+html, body { margin: 0; overflow: hidden; }
+body { background: var(--bg-app); color: var(--text-primary); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+button, textarea { font: inherit; }
+button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(47,111,237,.36); outline-offset: 2px; }
+svg { fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d8dce2; border-radius: 99px; }

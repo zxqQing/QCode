@@ -1,0 +1,39 @@
+server:
+  port: 8080
+  shutdown: graceful
+  # 删掉 servlet.encoding —— 这是 Servlet API 专属,WebFlux 默认就是 UTF-8
+  # 删掉 spring.mvc.async.request-timeout —— 那是 MVC 的,Spring WebFlux 用不到
+  http2:
+    enabled: true
+
+spring:
+  application:
+    name: qcode
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 55MB
+  # 关键:关闭响应压缩(若启用了的话),避免缓冲 SSE
+  codec:
+    max-in-memory-size: 16MB
+
+qcode:
+  model: ${QCODE_MODEL:dashscope:qwen-plus}
+  workspace: ${QCODE_WORKSPACE:${user.home}}
+  cors:
+    allowed-origins: ${QCODE_CORS_ORIGINS:http://localhost:3000,http://localhost:5173}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    root: INFO          # DEBUG 太吵,会拖慢流式
+    org.springframework.web: DEBUG   # 单独把 web 调到 DEBUG 看请求链路

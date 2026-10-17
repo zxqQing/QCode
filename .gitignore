@@ -1,0 +1,50 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+**/.qcode/
+**/secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Java / Maven
+**/target/
+*.class
+hs_err_pid*
+
+# Node.js / frontend build output
+**/node_modules/
+QCode-Desktop/dist/
+QCode-Desktop/out/
+QCode-Desktop/release/
+QCode-Desktop/.vite/
+QCode-Desktop/coverage/
+QCode-Desktop/tsconfig.tsbuildinfo
+
+# Generated desktop backend and bundled runtime
+QCode-Desktop/backend/qcode.jar
+QCode-Desktop/backend/qcode-*.jar
+QCode-Desktop/runtime/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.bak
+
+# IDE and operating system files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Codex / Agent runtime cache
+.cache/
+**/.cache/
+.codex/

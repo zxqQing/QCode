@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { activateModel, fetchModels } from "../services/modelApi";
 import { fetchSkills, type SkillSummary } from "../services/skillApi";
 import PermissionModePicker from "./PermissionModePicker";
@@ -58,13 +58,28 @@ interface ComposerProps {
   disabled: boolean;
   stopping?: boolean;
   sessionId: string;
-  onSend: (text: string, skillName?: string) => void;
+  onSend: (text: string, files?: File[], skillName?: string) => void;
   onStop?: () => void | Promise<void>;
   workspaceOpen?: boolean;
   showContext?: boolean;
   permissionState: PermissionState;
   planMode: boolean;
   onPlanModeChange: (enabled: boolean) => void;
+}
+
+interface DraftAttachment {
+  id: string;
+  file: File;
+  previewUrl?: string;
+}
+
+function attachmentId(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return `attachment-${crypto.randomUUID()}`;
+  return `attachment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isImage(file: File): boolean {
+  return file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name);
 }
 
 const Composer: FC<ComposerProps> = ({ projects, activeProject, onSelectProject, onCreateProject, disabled, stopping = false, sessionId, onSend, onStop, workspaceOpen = true, showContext = true, permissionState, planMode, onPlanModeChange }) => {
@@ -79,18 +94,31 @@ const Composer: FC<ComposerProps> = ({ projects, activeProject, onSelectProject,
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillError, setSkillError] = useState("");
   const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null);
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentsRef = useRef<DraftAttachment[]>([]);
   const addMenuRef = useRef<HTMLDivElement>(null);
-  const canSend = text.trim().length > 0;
+  const canSend = text.trim().length > 0 || attachments.length > 0;
 
   useEffect(() => { void fetchModels().then(setModels).catch(() => setModels([])); }, []);
 
   useEffect(() => {
     setText("");
     setSelectedSkill(null);
+    setAttachments((current) => {
+      current.forEach((attachment) => attachment.previewUrl && URL.revokeObjectURL(attachment.previewUrl));
+      return [];
+    });
     setAddMenuOpen(false);
     setSkillMenuOpen(false);
   }, [sessionId]);
+
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+
+  useEffect(() => () => {
+    attachmentsRef.current.forEach((attachment) => attachment.previewUrl && URL.revokeObjectURL(attachment.previewUrl));
+  }, []);
 
   const openSkillMenu = async () => {
     setSkillMenuOpen(true);
@@ -150,11 +178,37 @@ const Composer: FC<ComposerProps> = ({ projects, activeProject, onSelectProject,
 
   const send = () => {
     const value = text.trim();
-    if (!value || disabled) return;
-    onSend(value, selectedSkill?.name);
+    if ((!value && !attachments.length) || disabled) return;
+    onSend(value, attachments.map((attachment) => attachment.file), selectedSkill?.name);
     setText("");
+    setAttachments((current) => {
+      current.forEach((attachment) => attachment.previewUrl && URL.revokeObjectURL(attachment.previewUrl));
+      return [];
+    });
     setSelectedSkill(null);
     window.setTimeout(() => textareaRef.current?.focus(), 0);
+  };
+
+  const addFiles = (files: File[]) => {
+    const next = files
+      .filter((file) => !(file as File & { webkitRelativePath?: string }).webkitRelativePath)
+      .map((file) => ({ id: attachmentId(), file, previewUrl: isImage(file) ? URL.createObjectURL(file) : undefined }));
+    if (next.length) setAttachments((current) => [...current, ...next]);
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((current) => current.filter((attachment) => {
+      if (attachment.id !== id) return true;
+      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+      return false;
+    }));
+  };
+
+  const onPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files);
+    if (!files.length) return;
+    addFiles(files);
+    if (!event.clipboardData.getData("text/plain")) event.preventDefault();
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -168,15 +222,31 @@ const Composer: FC<ComposerProps> = ({ projects, activeProject, onSelectProject,
     <div className={`composer ${workspaceOpen ? "with-workspace" : ""}`}>
       {showContext && <div className="composer-context-row"><ProjectPicker projects={projects} activeProject={activeProject} onSelectProject={onSelectProject} onCreateProject={onCreateProject} /><span className="composer-computer-context"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="13" rx="1.5" /><path d="M2.5 20h19M9 17v3m6-3v3" /></svg>此计算机</span></div>}
       <div className="composer-input">
-        {selectedSkill && <span className="composer-skill-chip"><button type="button" aria-label={`移除技能 ${selectedSkill.name}`} disabled={disabled} onClick={() => setSelectedSkill(null)}>×</button><span>{selectedSkill.name}</span></span>}
-        <textarea ref={textareaRef} value={text} className="composer-textarea" placeholder="描述你想完成的任务…" rows={1} disabled={disabled} onChange={(event) => setText(event.target.value)} onKeyDown={onKeyDown} />
+        {attachments.length > 0 && <div className="composer-attachments" aria-label="待发送附件">
+          {attachments.map((attachment) => <div key={attachment.id} className={`composer-attachment ${attachment.previewUrl ? "image" : "file"}`}>
+            {attachment.previewUrl
+              ? <img src={attachment.previewUrl} alt={attachment.file.name} />
+              : <div className="composer-file-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.5h8l4 4V21.5H6Z" /><path d="M14 2.5v4h4" /></svg></div>}
+            <span title={attachment.file.name}>{attachment.file.name}</span>
+            <button type="button" aria-label={`移除附件 ${attachment.file.name}`} disabled={disabled} onClick={() => removeAttachment(attachment.id)}>×</button>
+          </div>)}
+        </div>}
+        <div className="composer-entry-row">
+          {selectedSkill && <span className="composer-skill-chip"><button type="button" aria-label={`移除技能 ${selectedSkill.name}`} disabled={disabled} onClick={() => setSelectedSkill(null)}>×</button><span>{selectedSkill.name}</span></span>}
+          <textarea ref={textareaRef} value={text} className="composer-textarea" placeholder={attachments.length ? "添加说明…" : "描述你想完成的任务…"} rows={1} disabled={disabled} onChange={(event) => setText(event.target.value)} onKeyDown={onKeyDown} onPaste={onPaste} />
+        </div>
       </div>
       <div className="composer-toolbar">
         <div className="composer-actions">
           <div className="composer-add" ref={addMenuRef}>
+            <input ref={fileInputRef} className="composer-file-input" type="file" multiple tabIndex={-1} onChange={(event) => { addFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
             <button className="tool-btn plus-btn" type="button" title="添加" aria-label="添加" aria-haspopup="menu" aria-expanded={addMenuOpen} disabled={disabled} onClick={() => setAddMenuOpen((open) => !open)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
             {addMenuOpen && <div className="composer-add-menu" role="menu" aria-label="添加">
               <span className="composer-add-heading">添加</span>
+              <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); fileInputRef.current?.click(); }}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 12.5 14 7a3 3 0 0 1 4.2 4.2l-7.4 7.4a5 5 0 0 1-7.1-7.1l7.1-7.1" /></svg>
+                <span><strong>文件和图片</strong><small>选择一个或多个文件</small></span>
+              </button>
               <button type="button" role="menuitemcheckbox" aria-checked={planMode} className={planMode ? "selected" : ""} onClick={() => { onPlanModeChange(!planMode); setAddMenuOpen(false); }}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6m-5 3h4" /><path d="M8.1 14.5A6 6 0 1 1 15.9 14.5C14.7 15.4 14 16.1 14 18h-4c0-1.9-.7-2.6-1.9-3.5Z" /></svg>
                 <span><strong>计划模式</strong><small>{planMode ? "已开启，点击关闭" : "开启计划模式"}</small></span>

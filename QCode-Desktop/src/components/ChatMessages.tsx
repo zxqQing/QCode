@@ -4,7 +4,7 @@ import { buildConversationTurnViews, type ActivitySegment } from "../utils/conve
 import ActivityGroup from "./ActivityGroup";
 import ChangeSummaryCard from "./ChangeSummaryCard";
 import TaskActivityGroup from "./TaskActivityGroup";
-import type { ChatMessage, MessageBlock, PendingConfirmation, ThinkingEvent, ToolEvent } from "../types/chat";
+import type { ChatMessage, MessageAttachment, MessageBlock, PendingConfirmation, ThinkingEvent, ToolEvent } from "../types/chat";
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
@@ -50,7 +50,8 @@ function buildConversationTurns(messages: ChatMessage[]): ConversationTurn[] {
 
   messages.forEach((message) => {
     if (message.role === "user") {
-      current = { id: message.id, userMessage: previewText(message.content), summary: "", streaming: false };
+      const attachmentSummary = message.attachments?.map((attachment) => attachment.name).join("、") || "";
+      current = { id: message.id, userMessage: previewText(message.content) || attachmentSummary || "附件", summary: "", streaming: false };
       turns.push(current);
       return;
     }
@@ -62,6 +63,22 @@ function buildConversationTurns(messages: ChatMessage[]): ConversationTurn[] {
 
   return turns;
 }
+
+function formatFileSize(size?: number): string {
+  if (size == null) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+const MessageAttachments: FC<{ attachments: MessageAttachment[] }> = ({ attachments }) => <div className="message-attachments">
+  {attachments.map((attachment) => attachment.kind === "image" && attachment.previewUrl
+    ? <figure key={attachment.id} className="message-attachment-image"><img src={attachment.previewUrl} alt={attachment.name} /><figcaption>{attachment.name}</figcaption></figure>
+    : <div key={attachment.id} className="message-attachment-file">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.5h8l4 4V21.5H6Z" /><path d="M14 2.5v4h4" /></svg>
+      <span><strong title={attachment.name}>{attachment.name}</strong>{formatFileSize(attachment.size) && <small>{formatFileSize(attachment.size)}</small>}</span>
+    </div>)}
+</div>;
 
 const ChatMessages: FC<ChatMessagesProps> = ({ messages, pendingConfirm, errorMessage, onConfirm, onOpenFile, onOpenChanges }) => {
   const messagesRef = useRef<HTMLElement>(null);
@@ -250,8 +267,11 @@ const ChatMessages: FC<ChatMessagesProps> = ({ messages, pendingConfirm, errorMe
               className="conversation-turn"
             >
               <article className="message-row message-user"><div className="message-body"><div className="message-content user-content" onClick={onContentClick}>
-                {turn.userMessage.skillName && <span className="message-skill"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5v-15Z" /><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20M8 7h7m-7 4h5" /></svg><span>{turn.userMessage.skillName}</span></span>}
-                <span className="user-content-text" dangerouslySetInnerHTML={{ __html: renderMessage(turn.userMessage) }} />
+                {Boolean(turn.userMessage.attachments?.length) && <MessageAttachments attachments={turn.userMessage.attachments || []} />}
+                {(turn.userMessage.skillName || turn.userMessage.content) && <div className="user-message-text-row">
+                  {turn.userMessage.skillName && <span className="message-skill"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5v-15Z" /><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20M8 7h7m-7 4h5" /></svg><span>{turn.userMessage.skillName}</span></span>}
+                  {turn.userMessage.content && <span className="user-content-text" dangerouslySetInnerHTML={{ __html: renderMessage(turn.userMessage) }} />}
+                </div>}
               </div></div></article>
               {turn.traceItems.length > 0 && <article className="message-row message-assistant message-task-row"><div className="message-body" onClick={onContentClick}>
                 <TaskActivityGroup active={turn.active} expanded={taskExpanded} durationMs={turn.durationMs} startedAt={turn.startedAt} onToggle={() => toggleTask(turn.id, turn.active)}>

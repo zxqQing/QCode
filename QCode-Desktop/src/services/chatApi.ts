@@ -90,14 +90,19 @@ export async function fetchSessionMessages(sessionId: string, projectId?: string
     : [];
 }
 
-export async function openChatStream(message: string, sessionId: string, signal: AbortSignal, projectId?: string | null, planMode = false, skillName?: string, config?: Partial<ChatApiConfig>): Promise<Response> {
+export async function openChatStream(message: string, sessionId: string, signal: AbortSignal, projectId?: string | null, planMode = false, skillName?: string, files: File[] = [], config?: Partial<ChatApiConfig>): Promise<Response> {
   const { baseUrl } = getConfig(config);
-  const params = new URLSearchParams({ message, sessionId, planMode: String(planMode) });
-  if (projectId) params.set("projectId", projectId);
-  if (skillName) params.set("skill", skillName);
-  return fetch(`${baseUrl}/chat?${params.toString()}`, {
-    method: "GET",
+  const body = new FormData();
+  body.set("sessionId", sessionId);
+  body.set("planMode", String(planMode));
+  if (message) body.set("message", message);
+  if (projectId) body.set("projectId", projectId);
+  if (skillName) body.set("skill", skillName);
+  files.forEach((file) => body.append("files", file, file.name));
+  return fetch(`${baseUrl}/chat`, {
+    method: "POST",
     headers: { Accept: "text/event-stream" },
+    body,
     signal
   });
 }

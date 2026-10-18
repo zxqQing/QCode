@@ -11,7 +11,7 @@ import {
 } from "../services/chatApi";
 import { createProject, deleteProject as removeProject, fetchProjects, updateProject } from "../services/projectApi";
 import { fetchSessionChanges, type SessionChangesResponse } from "../services/sessionChangesApi";
-import type { AgentEvent, ChatMessage, CreateProjectInput, MessageBlock, PendingConfirmation, Project, Session, SessionMessage, ThinkingEvent, ToolCall, ToolEvent } from "../types/chat";
+import type { AgentEvent, ChatMessage, CreateProjectInput, MessageAttachment, MessageBlock, PendingConfirmation, Project, Session, SessionMessage, ThinkingEvent, ToolCall, ToolEvent } from "../types/chat";
 
 const SESSION_STORAGE_KEY = "qcode-chat-session-id";
 const DEFAULT_SESSION_TITLE = "新会话";
@@ -299,12 +299,39 @@ function normalizeMessages(list: SessionMessage[]): ChatMessage[] {
 
     if (type === "text") {
       const content = String(item?.content || "");
-      if (!content) return;
+      const attachmentPaths = Array.isArray(item.attachmentPaths) ? item.attachmentPaths : [];
+      if (!content && !attachmentPaths.length) return;
       const role = String(item?.role || "").toUpperCase() === "USER" ? "user" : "assistant";
       const target = getMessage(id, role, timestamp, type).message;
       if (role === "user" && item.skillName) target.skillName = item.skillName;
-      target.content = target.content ? `${target.content}\n${content}` : content;
-      target.blocks = [...(target.blocks || []), markdownBlock(content, role === "assistant" ? id : undefined)];
+      if (content) {
+        target.content = target.content ? `${target.content}\n${content}` : content;
+        target.blocks = [...(target.blocks || []), markdownBlock(content, role === "assistant" ? id : undefined)];
+      }
+      if (role === "user" && attachmentPaths.length) {
+        target.attachments = attachmentPaths.map((path, attachmentIndex) => {
+          const rawName = path.split("/").pop() || `附件 ${attachmentIndex + 1}`;
+          const name = /^[0-9a-f-]{36}_.+/i.test(rawName) ? rawName.slice(37) : rawName;
+          const image = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+          return { id: `${id}-attachment-${attachmentIndex}`, name, mediaType: image ? `image/${name.split(".").pop()?.toLowerCase() === "jpg" ? "jpeg" : name.split(".").pop()?.toLowerCase()}` : "application/octet-stream", kind: image ? "image" : "file", path };
+        });
+      }
+      return;
+    }
+
+    if (type === "image") {
+      const mediaType = item.mediaType || "image/png";
+      const data = item.data || "";
+      if (!data) return;
+      const target = getMessage(id, "user", timestamp, type).message;
+      const attachments = [...(target.attachments || [])];
+      const pendingImage = attachments.findIndex((attachment) => attachment.kind === "image" && !attachment.previewUrl);
+      const imageAttachment: MessageAttachment = pendingImage >= 0
+        ? { ...attachments[pendingImage], mediaType, previewUrl: `data:${mediaType};base64,${data}` }
+        : { id: `${id}-image-${index}`, name: `图片 ${attachments.filter((attachment) => attachment.kind === "image").length + 1}`, mediaType, kind: "image", previewUrl: `data:${mediaType};base64,${data}` };
+      if (pendingImage >= 0) attachments[pendingImage] = imageAttachment;
+      else attachments.push(imageAttachment);
+      target.attachments = attachments;
       return;
     }
 
@@ -430,7 +457,7 @@ export interface UseChatResult {
   planMode: boolean;
   setPlanMode: (enabled: boolean) => void;
   loadSessions: () => Promise<void>;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, files?: File[], skillName?: string) => Promise<void>;
   confirmTool: (confirmed: boolean) => Promise<void>;
   selectSession: (session: Session, projectId?: string | null) => Promise<void>;
   newChat: () => void;
@@ -934,9 +961,9 @@ export function useChat(): UseChatResult {
     await Promise.all([loadSessions(), loadProjects(), loadChanges]);
   }, [loadProjects, loadSessions, updateRuntime]);
 
-  const sendMessage = useCallback(async (text: string, skillName?: string) => {
+  const sendMessage = useCallback(async (text: string, files: File[] = [], skillName?: string) => {
     const value = text.trim();
-    if (!value) return;
+    if (!value && !files.length) return;
     const targetSessionId = sessionIdRef.current;
     const targetProjectId = activeProjectIdRef.current;
     const key = chatSessionKey(targetSessionId, targetProjectId);
@@ -946,6 +973,14 @@ export function useChat(): UseChatResult {
     persistSessionId(targetSessionId);
     const userMessage = createMessage("user", value);
     userMessage.skillName = skillName;
+    userMessage.attachments = files.map((file, index) => ({
+      id: `${userMessage.id}-attachment-${index}`,
+      name: file.name,
+      mediaType: file.type || "application/octet-stream",
+      size: file.size,
+      kind: file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name) ? "image" : "file",
+      previewUrl: file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name) ? URL.createObjectURL(file) : undefined
+    }));
     const assistantMessage = createMessage("assistant");
     assistantMessage.streaming = true;
     assistantMessage.activityStartedAt = Date.now();
@@ -964,7 +999,7 @@ export function useChat(): UseChatResult {
     const targetPlanMode = readPlanMode(targetSessionId, targetProjectId);
 
     try {
-      const response = await openChatStream(value, targetSessionId, controller.signal, targetProjectId, targetPlanMode, skillName);
+      const response = await openChatStream(value, targetSessionId, controller.signal, targetProjectId, targetPlanMode, skillName, files);
       if (!response.ok) throw new Error(`请求失败（${response.status}）`);
       // 会话在服务端建立后立即刷新侧栏，切到其他项目时仍能从侧栏返回这个运行中的会话。
       void Promise.all([loadSessions(), loadProjects()]);

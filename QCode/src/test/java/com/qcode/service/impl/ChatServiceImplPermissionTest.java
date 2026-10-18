@@ -7,6 +7,8 @@ import com.qcode.domain.dto.ConfirmDTO;
 import com.qcode.permission.PermissionManager;
 import com.qcode.permission.PermissionMode;
 import com.qcode.project.ProjectManager;
+import com.qcode.service.SkillService;
+import com.qcode.session.SessionExecution;
 import com.qcode.session.SessionTitleManager;
 import com.qcode.session.SessionTitleMetadata;
 import io.agentscope.core.agent.RuntimeContext;
@@ -21,10 +23,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -40,6 +44,7 @@ class ChatServiceImplPermissionTest {
     @Mock SessionTitleManager sessionTitleManager;
     @Mock ApprovalAgent approvalAgent;
     @Mock SessionDiffService sessionDiffService;
+    @Mock SkillService skillService;
     @Mock HarnessAgent agent;
     @Mock SessionTitleMetadata metadata;
 
@@ -48,9 +53,9 @@ class ChatServiceImplPermissionTest {
     @BeforeEach
     void setUp() {
         service = new ChatServiceImpl(permissionManager, projectManager, agentManager,
-                sessionTitleManager, approvalAgent, sessionDiffService);
-        when(sessionTitleManager.incrementRoundCount("session")).thenReturn(metadata);
-        when(metadata.roundCount()).thenReturn(2);
+                sessionTitleManager, approvalAgent, sessionDiffService, skillService);
+        lenient().when(sessionTitleManager.incrementRoundCount("session")).thenReturn(metadata);
+        lenient().when(metadata.roundCount()).thenReturn(2);
     }
 
     @Test
@@ -124,8 +129,8 @@ class ChatServiceImplPermissionTest {
         dto.setProjectId("project-1");
         dto.setConfirmed(true);
         dto.setToolCalls(List.of(toolCall()));
-        when(agentManager.createAgent("project-1", "session")).thenReturn(agent);
         when(agent.streamEvents(any(Msg.class), any(RuntimeContext.class))).thenReturn(Flux.empty());
+        executions().put("project-1:session", new SessionExecution("session", "project-1", agent));
 
         service.confirmTool(dto).collectList().block(Duration.ofSeconds(5));
 
@@ -136,7 +141,7 @@ class ChatServiceImplPermissionTest {
     void chatEntersPlanModeWhenRequested() throws Exception {
         prepareChat();
 
-        service.chat("test", "session", "project-1", true)
+        service.chat("test", "session", "project-1", null, true, List.of())
                 .collectList().block(Duration.ofSeconds(5));
 
         verify(agent).enterPlanMode(any(RuntimeContext.class));
@@ -148,7 +153,7 @@ class ChatServiceImplPermissionTest {
         prepareChat();
         when(agent.isPlanModeActive(any(RuntimeContext.class))).thenReturn(true);
 
-        service.chat("test", "session", "project-1", false)
+        service.chat("test", "session", "project-1", null, false, List.of())
                 .collectList().block(Duration.ofSeconds(5));
 
         verify(agent).exitPlanMode(any(RuntimeContext.class));
@@ -160,7 +165,7 @@ class ChatServiceImplPermissionTest {
         prepareChat();
         when(agent.isPlanModeActive(any(RuntimeContext.class))).thenReturn(true);
 
-        service.chat("test", "session", "project-1", true)
+        service.chat("test", "session", "project-1", null, true, List.of())
                 .collectList().block(Duration.ofSeconds(5));
 
         verify(agent, never()).enterPlanMode(any(RuntimeContext.class));
@@ -174,6 +179,17 @@ class ChatServiceImplPermissionTest {
         when(metadata.projectId()).thenReturn("project-1");
         when(agentManager.createAgent("project-1", "session")).thenReturn(agent);
         when(agent.streamEvents(any(Msg.class), any(RuntimeContext.class))).thenReturn(Flux.empty());
+    }
+
+    private List<AgentEvent> run() {
+        executions().put("project-1:session", new SessionExecution("session", "project-1", agent));
+        return service.agentLoop(new UserMessage("test"), "session", "project-1")
+                .collectList().block(Duration.ofSeconds(5));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, SessionExecution> executions() {
+        return (Map<String, SessionExecution>) ReflectionTestUtils.getField(service, "sessionExecutions");
     }
 
     private RequireUserConfirmEvent confirmationWith(ToolUseBlock... calls) {

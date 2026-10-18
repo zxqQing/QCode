@@ -1,6 +1,7 @@
 package com.qcode.agent;
 
 import com.qcode.config.AgentConfig;
+import com.qcode.mcp.McpManager;
 import com.qcode.model.ModelManager;
 import com.qcode.model.ModelResolver;
 import com.qcode.permission.PermissionManager;
@@ -10,8 +11,10 @@ import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.state.JsonFileAgentStateStore;
+import io.agentscope.core.tool.Toolkit;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
+import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
 import io.agentscope.harness.agent.transcript.FilesystemTranscriptStore;
 import io.agentscope.harness.agent.workspace.LocalFsMode;
@@ -195,16 +198,20 @@ public class AgentManager {
         """;
 
 
-
+    private final McpManager mcpManager;
     private final ProjectManager projectManager;
     private final AgentConfig agentConfig;
     private final ModelManager modelManager;
     private final ModelResolver modelResolver;
     private HarnessAgent agent;
 
-    public AgentManager(AgentConfig agentConfig) throws IOException {
-        this.projectManager = new ProjectManager();
-        this.modelManager = new ModelManager();
+    public AgentManager(AgentConfig agentConfig,
+                        McpManager mcpManager,
+                        ProjectManager projectManager,
+                        ModelManager modelManager) throws IOException {
+        this.mcpManager = mcpManager;
+        this.projectManager = projectManager;
+        this.modelManager = modelManager;
         this.agentConfig = agentConfig;
         this.modelResolver = new ModelResolver();
         this.agent = createAgent(null, null);
@@ -230,7 +237,7 @@ public class AgentManager {
 
 
     public HarnessAgent createAgent(String projectId,String sessionId) throws IOException {
-        //        LocalFilesystemSpec filesystemSpec = new LocalFilesystemSpec()
+//                LocalFilesystemSpec filesystemSpec = new LocalFilesystemSpec()
 //                .project(Path.of("D:/zxq/agent/QCodeTest"))
 //                .projectWritable(true)
 //                .isolationScope(IsolationScope.GLOBAL);
@@ -240,8 +247,7 @@ public class AgentManager {
 //            throw new IllegalStateException("Local filesystem does not provide shell execution");
 //        }
 
-        //Toolkit toolkit = new Toolkit();
-        //toolkit.registerTool(new QCodeShellExecuteTool(shellFilesystem));
+
 
         PermissionManager permission = new PermissionManager();
         PermissionContextState permCtx = permission.createPermissionContext();
@@ -260,12 +266,17 @@ public class AgentManager {
         } catch (IOException error) {
             throw new IllegalStateException("创建 Agent 工作区目录失败：" + agentWorkspace, error);
         }
+        Toolkit toolkit = new Toolkit();
+        // 自动连接并注册所有已启用的 MCP
+        mcpManager.registerTo(toolkit);
+
         HarnessAgent.Builder builder = HarnessAgent.builder()
                 .name("QCode")
                 .sysPrompt(SYSTEM_PROMPT)
                 .workspace(agentWorkspace)
                 .maxIters(128)
                 .maxRetries(3)
+                .toolkit(toolkit)
                 .permissionContext(permCtx)
                 .transcriptStore(new FilesystemTranscriptStore(transcriptRoot))
                 .transcriptTenant(tenant)
@@ -285,22 +296,19 @@ public class AgentManager {
             builder.model(configuredModel);
         }
 
-        // 没有指定项目时，文件操作落在按会话隔离的临时项目目录
+        return builder.abstractFilesystem(createFilesystem(projectId, sessionId)).build();
+    }
+
+    /** 创建与 Agent 一致的根目录文件系统，确保上传文件遵循相同的路径策略。 */
+    public AbstractFilesystem createFilesystem(String projectId, String sessionId) throws IOException {
+        Path agentWorkspace = resolveWorkspaceBase(projectId);
+        Files.createDirectories(agentWorkspace);
         if (projectId == null || projectId.isBlank()) {
             Path projectWorkspace = resolveScratchDir(sessionId);
-            // 无项目会话的文件工具根目录，确保存在
             Files.createDirectories(projectWorkspace);
-            HarnessAgent agent = builder.filesystem(new LocalFilesystemSpec()
-                            .project(projectWorkspace)
-                            .mode(LocalFsMode.ROOTED)
-                            .projectWritable(true)
-                            .inheritEnv(true)
-                            .isolationScope(IsolationScope.USER))
-                    .build();
-            return agent;
+            return filesystemSpec(projectWorkspace).toFilesystem(agentWorkspace, null);
         }
 
-        // 加载项目元数据
         ProjectMetadata project = projectManager.get(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("项目不存在：" + projectId));
 
@@ -320,17 +328,18 @@ public class AgentManager {
                 .filter(path -> !path.isBlank())
                 .map(path -> Path.of(path).toAbsolutePath().normalize())
                 .toList();
-        // 根据当前项目配置创建 Agent
-        HarnessAgent agent = builder.filesystem(new LocalFilesystemSpec()
-                        .project(projectPath)
-                        .additionalRoots(additionalRoots)
-                        .mode(LocalFsMode.ROOTED)
-                        .projectWritable(true)
-                        .inheritEnv(true)
-                        .isolationScope(IsolationScope.USER))
-                .build();
-        this.agent = agent;
-        return agent;
+        return filesystemSpec(projectPath)
+                .additionalRoots(additionalRoots)
+                .toFilesystem(agentWorkspace, null);
+    }
+
+    private LocalFilesystemSpec filesystemSpec(Path projectPath) {
+        return new LocalFilesystemSpec()
+                .project(projectPath)
+                .mode(LocalFsMode.ROOTED)
+                .projectWritable(true)
+                .inheritEnv(true)
+                .isolationScope(IsolationScope.USER);
     }
     /**
      * 解析 Agent 工作区根目录：有项目时按项目隔离，无项目时用默认目录。

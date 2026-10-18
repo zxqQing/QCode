@@ -98,6 +98,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   skillName?: string;
+  attachments?: MessageAttachment[];
   blocks?: MessageBlock[];
   toolEvents?: ToolEvent[];
   streaming: boolean;
@@ -108,13 +109,26 @@ export interface ChatMessage {
   activityDurationMs?: number;
 }
 
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  mediaType: string;
+  size?: number;
+  kind: "image" | "file";
+  previewUrl?: string;
+  path?: string;
+}
+
 export interface SessionMessage {
-  blockType: "text" | "thinking" | "tool_use" | "tool_result";
+  blockType: "text" | "image" | "thinking" | "tool_use" | "tool_result";
   messageId: string;
   role: "USER" | "ASSISTANT" | "TOOL";
   timestamp: string;
   content: string | null;
   skillName?: string | null;
+  attachmentPaths?: string[] | null;
+  mediaType?: string | null;
+  data?: string | null;
   toolCallId: string | null;
   name: string | null;
   input: Record<string, unknown> | null;

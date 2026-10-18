@@ -7,10 +7,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.io.IOException;
+import java.util.List;
 
 @RestController
 @RequestMapping("/chat")
@@ -19,13 +20,14 @@ import java.io.IOException;
 public class ChatController {
     private final ChatService chatService;
 
-    @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<AgentEvent> chat(@RequestParam String message,
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<AgentEvent> chat(@RequestParam(required = false) String message,
                                  @RequestParam String sessionId,
                                  @RequestParam(required = false) String projectId,
                                  @RequestParam(required = false) String skill,
-                                 @RequestParam(defaultValue = "false") boolean planMode) throws IOException {
-        return chatService.chat(message, sessionId, projectId, skill, planMode);
+                                 @RequestParam(defaultValue = "false") boolean planMode,
+                                 @RequestParam(value = "files", required = false) List<MultipartFile> files) throws IOException {
+        return chatService.chat(message, sessionId, projectId, skill, planMode, files);
     }
     @PostMapping(value = "/confirm", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<AgentEvent> confirmTool(@RequestBody ConfirmDTO dto){

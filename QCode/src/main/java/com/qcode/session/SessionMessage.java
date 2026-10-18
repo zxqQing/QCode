@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 
 import java.util.Map;
+import java.util.List;
 
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -42,6 +43,13 @@ public class SessionMessage {
 
     /** 当前用户消息显式选择的技能名称。 */
     private String skillName;
+
+    /** 用户本轮上传后写入 Agent 工作区的附件路径。 */
+    private List<String> attachmentPaths;
+
+    /** image 块的媒体类型与 Base64 数据，供前端恢复图片预览。 */
+    private String mediaType;
+    private String data;
 
     // ==================== tool_use / tool_result 共用 ====================
 

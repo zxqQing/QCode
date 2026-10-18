@@ -57,7 +57,7 @@ public class SessionManager {
                     .forEach(line -> {
                         try {
                             SessionMessage message = objectMapper.readValue(line, SessionMessage.class);
-                            hideSelectedSkillDirective(message);
+                            hideInternalUserDirectives(message);
                             messages.add(message);
                         } catch (IOException e) {
                             log.warn("解析消息行失败, sessionId={}", sessionId, e);
@@ -108,7 +108,13 @@ public class SessionManager {
                     switch (blockType) {
                         case "text" -> {
                             sm.setContent(block.path("text").asText(null));
-                            hideSelectedSkillDirective(sm);
+                            hideInternalUserDirectives(sm);
+                        }
+                        case "image" -> {
+                            JsonNode source = block.path("source");
+                            sm.setMediaType(source.path("mediaType").asText(
+                                    source.path("media_type").asText("image/png")));
+                            sm.setData(source.path("data").asText(null));
                         }
                         case "thinking" -> sm.setContent(block.path("thinking").asText(null));
                         case "tool_use" -> {
@@ -197,6 +203,11 @@ public class SessionManager {
         }
     }
 
+    private void hideInternalUserDirectives(SessionMessage message) {
+        hideSelectedSkillDirective(message);
+        hideAttachmentDirective(message);
+    }
+
     private void hideSelectedSkillDirective(SessionMessage message) {
         if (!"USER".equalsIgnoreCase(message.getRole()) || message.getContent() == null
                 || !message.getContent().startsWith("<qcode-selected-skill ")) {
@@ -216,5 +227,24 @@ public class SessionManager {
         if (contentStart >= 0) {
             message.setContent(message.getContent().substring(contentStart + closingTag.length()));
         }
+    }
+
+    private void hideAttachmentDirective(SessionMessage message) {
+        if (!"USER".equalsIgnoreCase(message.getRole()) || message.getContent() == null) {
+            return;
+        }
+        String marker = "\n\n已上传附件。请按需读取以下路径：\n";
+        int markerStart = message.getContent().indexOf(marker);
+        if (markerStart < 0) {
+            return;
+        }
+        String pathSection = message.getContent().substring(markerStart + marker.length());
+        List<String> paths = pathSection.lines()
+                .filter(line -> line.startsWith("- "))
+                .map(line -> line.substring(2).trim())
+                .filter(path -> !path.isEmpty())
+                .toList();
+        message.setAttachmentPaths(paths);
+        message.setContent(message.getContent().substring(0, markerStart));
     }
 }

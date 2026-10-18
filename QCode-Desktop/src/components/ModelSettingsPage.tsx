@@ -3,10 +3,11 @@ import { activateModel, addModel, fetchModelProviders, fetchModels } from "../se
 import type { ModelConfig, ModelProvider } from "../types/chat";
 import PermissionSettingsPage from "./PermissionSettingsPage";
 import SkillSettingsPage from "./SkillSettingsPage";
+import McpSettingsPage from "./McpSettingsPage";
 import type { PermissionState } from "../hooks/usePermissionMode";
 
 type Props = { onBack: () => void; permissionState: PermissionState };
-type SettingsSection = "models" | "skills" | "permissions";
+type SettingsSection = "models" | "mcp" | "skills" | "permissions";
 
 export default function ModelSettingsPage({ onBack, permissionState }: Props) {
   const [section, setSection] = useState<SettingsSection>("models");
@@ -17,11 +18,12 @@ export default function ModelSettingsPage({ onBack, permissionState }: Props) {
       <div className="settings-account"><div className="settings-avatar">●</div><div><strong>QCode</strong><small>设置</small></div></div>
       <nav>
         <button className={`settings-nav-item ${section === "models" ? "active" : ""}`} type="button" onClick={() => setSection("models")}><span className="settings-nav-icon">⚙</span><span>模型</span></button>
+        <button className={`settings-nav-item ${section === "mcp" ? "active" : ""}`} type="button" onClick={() => setSection("mcp")}><span className="settings-nav-icon">⌘</span><span>MCP</span></button>
         <button className={`settings-nav-item ${section === "skills" ? "active" : ""}`} type="button" onClick={() => setSection("skills")}><span className="settings-nav-icon">◇</span><span>技能</span></button>
         <button className={`settings-nav-item ${section === "permissions" ? "active" : ""}`} type="button" onClick={() => setSection("permissions")}><span className="settings-nav-icon">✓</span><span>权限审批</span></button>
       </nav>
     </aside>
-    {section === "models" ? <ModelSettingsContent /> : section === "skills" ? <SkillSettingsPage /> : <PermissionSettingsPage permissionState={permissionState} />}
+    {section === "models" ? <ModelSettingsContent /> : section === "mcp" ? <McpSettingsPage /> : section === "skills" ? <SkillSettingsPage /> : <PermissionSettingsPage permissionState={permissionState} />}
   </div>;
 }
 

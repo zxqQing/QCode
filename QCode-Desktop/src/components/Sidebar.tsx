@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRecentSessions } from "../services/chatApi";
 import { fetchProjectSessions } from "../services/projectApi";
 import type { CreateProjectInput, PageResult, Project, Session } from "../types/chat";
@@ -73,8 +73,10 @@ export default function Sidebar(props: Props) {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [width, setWidth] = useState(() => Number(localStorage.getItem(WIDTH_KEY) || 256));
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || "light");
+  const recentRequestId = useRef(0);
+  const projectRequestIds = useRef<Record<string, number>>({});
 
-  const mergeSessions = (sessions: Session[]) => {
+  const mergeSessions = useCallback((sessions: Session[]) => {
     setSessionStore((current) => {
       const next = { ...current };
       sessions.forEach((session) => {
@@ -83,25 +85,23 @@ export default function Sidebar(props: Props) {
       });
       return next;
     });
-  };
+  }, []);
 
-  const loadRecent = async (query = search) => {
+  const loadRecent = async (query: string) => {
+    const requestId = ++recentRequestId.current;
     setRecentLoading(true);
     try {
       const items = (await fetchRecentSessions(query, "", 30)).items;
+      if (requestId !== recentRequestId.current) return;
       mergeSessions(items);
       setRecentSessions(items);
     } catch {
-      setRecentSessions(props.sessions || []);
-      mergeSessions(props.sessions || []);
-    } finally { setRecentLoading(false); }
+      // 搜索刷新失败时保留当前内容。
+    } finally {
+      if (requestId === recentRequestId.current) setRecentLoading(false);
+    }
   };
 
-  useEffect(() => {
-    mergeSessions(props.sessions || []);
-    if (!search) setRecentSessions(props.sessions || []);
-  }, [props.sessions]);
-  useEffect(() => { void loadRecent(search); }, [search]);
   useEffect(() => { try { localStorage.setItem(PROJECT_STATE_KEY, JSON.stringify(expandedProjects)); } catch { /* ignore */ } }, [expandedProjects]);
   useEffect(() => { localStorage.setItem(PROJECTS_SECTION_KEY, String(projectsExpanded)); }, [projectsExpanded]);
   useEffect(() => { localStorage.setItem(RECENT_SECTION_KEY, String(recentExpanded)); }, [recentExpanded]);
@@ -114,25 +114,58 @@ export default function Sidebar(props: Props) {
 
   const loadProject = async (project: Project, force = false) => {
     if (!force && projectSessions[project.projectId]) return;
+    const requestId = (projectRequestIds.current[project.projectId] || 0) + 1;
+    projectRequestIds.current[project.projectId] = requestId;
     setBusyProjectId(project.projectId);
     try {
       const page = await fetchProjectSessions(project.projectId, search, "", PROJECT_SESSION_PAGE_SIZE);
+      if (projectRequestIds.current[project.projectId] !== requestId) return;
       mergeSessions(page.items);
       setProjectSessions((current) => ({ ...current, [project.projectId]: page }));
     } catch {
-      setProjectSessions((current) => ({ ...current, [project.projectId]: { items: [], hasMore: false } }));
-    } finally { setBusyProjectId((current) => current === project.projectId ? null : current); }
+      // 后台刷新失败时保留上一次成功加载的项目会话。
+    } finally {
+      if (projectRequestIds.current[project.projectId] === requestId) {
+        setBusyProjectId((current) => current === project.projectId ? null : current);
+      }
+    }
   };
+
+  useEffect(() => {
+    mergeSessions(props.sessions || []);
+    if (!search.trim()) {
+      recentRequestId.current += 1;
+      setRecentLoading(false);
+      setRecentSessions(props.sessions || []);
+    }
+    const openProjects = props.projects.filter((project) => expandedProjects[project.projectId]);
+    void Promise.all(openProjects.map((project) => loadProject(project, true)));
+  }, [props.sessions]);
+
+  useEffect(() => {
+    const query = search.trim();
+    if (!query) {
+      recentRequestId.current += 1;
+      setRecentLoading(false);
+      setRecentSessions(props.sessions || []);
+      return;
+    }
+    const timer = window.setTimeout(() => { void loadRecent(query); }, 200);
+    return () => window.clearTimeout(timer);
+  }, [search, props.sessions, mergeSessions]);
 
   const toggleProject = (project: Project) => {
     const next = !expandedProjects[project.projectId];
     setExpandedProjects((current) => ({ ...current, [project.projectId]: next }));
-    if (next) void loadProject(project);
+    if (next) void loadProject(project, true);
   };
 
   useEffect(() => {
     const openProjects = props.projects.filter((project) => expandedProjects[project.projectId]);
-    void Promise.all(openProjects.map((project) => loadProject(project, true)));
+    const timer = window.setTimeout(() => {
+      void Promise.all(openProjects.map((project) => loadProject(project, true)));
+    }, 200);
+    return () => window.clearTimeout(timer);
   }, [search]);
 
   const loadMore = async (project: Project) => {
@@ -173,12 +206,10 @@ export default function Sidebar(props: Props) {
     const value = window.prompt("重命名会话", titleOf(session));
     if (!value?.trim()) return;
     await props.onRenameSession(session.sessionId, value.trim(), session.projectId || null);
-    await loadRecent();
   };
   const deleteSession = async (session: Session) => {
     if (!window.confirm(`确定删除“${titleOf(session)}”？此操作不可撤销。`)) return;
     await props.onDeleteSession(session.sessionId, session.projectId || null);
-    await loadRecent();
   };
   const renameProject = async (project: Project) => {
     const value = window.prompt("重命名项目", project.name);

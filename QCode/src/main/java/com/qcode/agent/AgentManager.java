@@ -14,8 +14,12 @@ import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
+import io.agentscope.harness.agent.bus.WorkspaceAsyncToolRegistry;
+import io.agentscope.harness.agent.bus.WorkspaceMessageBus;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
+import io.agentscope.harness.agent.subagent.SubagentDeclaration;
+import io.agentscope.harness.agent.subagent.WorkspaceMode;
 import io.agentscope.harness.agent.transcript.FilesystemTranscriptStore;
 import io.agentscope.harness.agent.workspace.LocalFsMode;
 import org.springframework.stereotype.Component;
@@ -24,6 +28,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -237,18 +242,6 @@ public class AgentManager {
 
 
     public HarnessAgent createAgent(String projectId,String sessionId) throws IOException {
-//                LocalFilesystemSpec filesystemSpec = new LocalFilesystemSpec()
-//                .project(Path.of("D:/zxq/agent/QCodeTest"))
-//                .projectWritable(true)
-//                .isolationScope(IsolationScope.GLOBAL);
-//        AbstractFilesystem filesystem = filesystemSpec.toFilesystem(
-//                projectWorkspace, null);
-//        if (!(filesystem instanceof AbstractSandboxFilesystem shellFilesystem)) {
-//            throw new IllegalStateException("Local filesystem does not provide shell execution");
-//        }
-
-
-
         PermissionManager permission = new PermissionManager();
         PermissionContextState permCtx = permission.createPermissionContext();
 
@@ -288,7 +281,50 @@ public class AgentManager {
                 .planFileDirectory("plans")
                 .enableTaskList()
                 // 前端关闭导致确认挂起被遗弃时，自动取消挂起的工具调用，新消息可正常开启新轮次
-                .enablePendingToolRecovery(true);
+                .enablePendingToolRecovery(true)
+                // Explore：代码探索
+                .subagent(SubagentDeclaration.builder()
+                        .name("explore")
+                        .description("""
+                        负责代码库探索、文件搜索、项目结构分析、
+                        类与方法定位、调用链追踪和依赖关系分析。
+                        只允许读取和分析代码，不修改任何文件。
+                        """)
+                        .workspace(Paths.get(System.getProperty("user.home"), ".qcode", "subagents", "explore"))
+                        .workspaceMode(WorkspaceMode.ISOLATED)
+                        .tools(List.of("read_file", "glob", "grep"))
+                        .steps(15)
+                        .build())
+                // Reviewer：代码审查
+                .subagent(SubagentDeclaration.builder()
+                        .name("reviewer")
+                        .description("""
+                        负责代码审查，检查潜在 Bug、并发问题、
+                        安全漏洞、性能问题和代码设计缺陷。
+                        提供具体的问题位置、原因和修改建议。
+                        只进行审查，不直接修改文件。
+                        """)
+                        .workspace(Paths.get(System.getProperty("user.home"), ".qcode", "subagents", "reviewer"))
+                        .workspaceMode(WorkspaceMode.ISOLATED)
+                        //.workspaceMode(WorkspaceMode.SHARED)
+                        .tools(List.of("read_file", "glob", "grep"))
+                        .steps(20)
+                        .build())
+                // Tester：测试验证
+                .subagent(SubagentDeclaration.builder()
+                        .name("runner")
+                        .description("""
+                        负责执行测试、验证编译结果、分析构建失败、
+                        定位测试异常和检查代码修改的正确性。
+                        可以执行必要的测试和构建命令，
+                        但不主动修改源代码。
+                        """)
+                        .workspace(Paths.get(System.getProperty("user.home"), ".qcode", "subagents", "runner"))
+                        .workspaceMode(WorkspaceMode.ISOLATED)
+                        //.workspaceMode(WorkspaceMode.SHARED)
+                        .tools(List.of("read_file", "glob", "grep", "execute"))
+                        .steps(20)
+                        .build());
         Model configuredModel = modelManager.createModel();
         if (configuredModel == null){
             builder.model(agentConfig.getModel());
@@ -296,17 +332,36 @@ public class AgentManager {
             builder.model(configuredModel);
         }
 
-        return builder.abstractFilesystem(createFilesystem(projectId, sessionId)).build();
+        // 框架默认把消息总线持久化到项目根的 .agentscope/bus，会污染用户项目目录。
+        // 注入独立的总线文件系统，把队列数据重定向到 ~/.qcode/bus 下。
+        Path busRoot = Paths.get(System.getProperty("user.home"), ".qcode");
+        Files.createDirectories(busRoot);
+        AbstractFilesystem busFilesystem = filesystemSpec(busRoot).toFilesystem(agentWorkspace, null);
+        builder.messageBus(new WorkspaceMessageBus(busFilesystem, "bus"))
+                .asyncToolRegistry(new WorkspaceAsyncToolRegistry(busFilesystem, "bus/async-tools"));
+
+        return builder.filesystem(buildFilesystemSpec(projectId, sessionId)).build();
     }
 
     /** 创建与 Agent 一致的根目录文件系统，确保上传文件遵循相同的路径策略。 */
     public AbstractFilesystem createFilesystem(String projectId, String sessionId) throws IOException {
         Path agentWorkspace = resolveWorkspaceBase(projectId);
         Files.createDirectories(agentWorkspace);
+        return buildFilesystemSpec(projectId, sessionId).toFilesystem(agentWorkspace, null);
+    }
+
+    /**
+     * 组装项目文件系统 spec。Agent 挂载与上传文件共用同一份配置，
+     * 保证两侧的 ROOTED 边界完全一致，避免配置漂移。
+     */
+    private LocalFilesystemSpec buildFilesystemSpec(String projectId, String sessionId) throws IOException {
+        Path attachmentsRoot = resolveAttachmentsRoot();
+        Files.createDirectories(attachmentsRoot);
         if (projectId == null || projectId.isBlank()) {
             Path projectWorkspace = resolveScratchDir(sessionId);
             Files.createDirectories(projectWorkspace);
-            return filesystemSpec(projectWorkspace).toFilesystem(agentWorkspace, null);
+            return filesystemSpec(projectWorkspace)
+                    .additionalRoots(List.of(attachmentsRoot));
         }
 
         ProjectMetadata project = projectManager.get(projectId)
@@ -328,9 +383,16 @@ public class AgentManager {
                 .filter(path -> !path.isBlank())
                 .map(path -> Path.of(path).toAbsolutePath().normalize())
                 .toList();
+        List<Path> filesystemRoots = new ArrayList<>(additionalRoots);
+        filesystemRoots.add(attachmentsRoot);
         return filesystemSpec(projectPath)
-                .additionalRoots(additionalRoots)
-                .toFilesystem(agentWorkspace, null);
+                .additionalRoots(filesystemRoots.stream().distinct().toList());
+    }
+
+    /** Shared attachment directory, exposed to the rooted filesystem as an additional allowed root. */
+    public static Path resolveAttachmentsRoot() {
+        return Paths.get(System.getProperty("user.home"), ".qcode", "attachments")
+                .toAbsolutePath().normalize();
     }
 
     private LocalFilesystemSpec filesystemSpec(Path projectPath) {

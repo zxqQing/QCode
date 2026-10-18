@@ -84,7 +84,8 @@ class ChatServiceImplUploadTest {
         List<Map.Entry<String, byte[]>> uploaded = capturedUploads();
         assertEquals(4, uploaded.size());
         assertEquals(4, uploaded.stream().map(Map.Entry::getKey).distinct().count());
-        assertTrue(uploaded.stream().allMatch(entry -> entry.getKey().startsWith("attachments/session/")));
+        assertTrue(uploaded.stream().allMatch(entry -> java.nio.file.Path.of(entry.getKey()).isAbsolute()
+                && java.nio.file.Path.of(entry.getKey()).startsWith(AgentManager.resolveAttachmentsRoot())));
         assertArrayEquals(new byte[]{4, 5}, uploaded.get(1).getValue());
         Msg message = capturedMessage();
         uploaded.forEach(entry -> assertTrue(message.getTextContent().contains(entry.getKey())));

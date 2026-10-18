@@ -33,23 +33,23 @@ class AgentManagerFilesystemTest {
             project.setRootPath(projectRoot.toString());
             when(projects.get("project-1")).thenReturn(Optional.of(project));
 
-            String relativePath = "attachments/first/document.md";
+            Path attachmentPath = AgentManager.resolveAttachmentsRoot().resolve("first/document.md");
             byte[] content = "hello".getBytes();
             AbstractFilesystem projectFs = manager.createFilesystem("project-1", "first");
-            assertTrue(projectFs.uploadFiles(context("first"), List.of(Map.entry(relativePath, content)))
+            assertTrue(projectFs.uploadFiles(context("first"), List.of(Map.entry(attachmentPath.toString(), content)))
                     .getFirst().isSuccess());
-            assertArrayEquals(content, Files.readAllBytes(projectRoot.resolve(relativePath)));
+            assertArrayEquals(content, Files.readAllBytes(attachmentPath));
 
             AbstractFilesystem firstScratch = manager.createFilesystem(null, "first");
             AbstractFilesystem secondScratch = manager.createFilesystem(null, "second");
-            assertTrue(firstScratch.uploadFiles(context("first"), List.of(Map.entry(relativePath, content)))
+            assertTrue(firstScratch.uploadFiles(context("first"), List.of(Map.entry(attachmentPath.toString(), content)))
                     .getFirst().isSuccess());
+            Path secondAttachmentPath = AgentManager.resolveAttachmentsRoot().resolve("second/document.md");
             assertTrue(secondScratch.uploadFiles(context("second"),
-                    List.of(Map.entry("attachments/second/document.md", new byte[]{2})))
+                    List.of(Map.entry(secondAttachmentPath.toString(), new byte[]{2})))
                     .getFirst().isSuccess());
-            assertArrayEquals(content, Files.readAllBytes(AgentManager.resolveScratchDir("first").resolve(relativePath)));
-            assertArrayEquals(new byte[]{2}, Files.readAllBytes(AgentManager.resolveScratchDir("second")
-                    .resolve("attachments/second/document.md")));
+            assertArrayEquals(content, Files.readAllBytes(attachmentPath));
+            assertArrayEquals(new byte[]{2}, Files.readAllBytes(secondAttachmentPath));
             assertNotEquals(AgentManager.resolveScratchDir("first"), AgentManager.resolveScratchDir("second"));
         } finally {
             if (previousHome == null) System.clearProperty("user.home");

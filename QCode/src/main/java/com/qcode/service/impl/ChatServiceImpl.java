@@ -39,7 +39,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class ChatServiceImpl implements ChatService {
-    private static final String ATTACHMENT_DIRECTORY = "attachments/";
     private final PermissionManager permissionManager;
     private final ProjectManager projectManager;
     private final AgentManager agentManager;
@@ -136,7 +135,10 @@ public class ChatServiceImpl implements ChatService {
             if (safeName.isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "附件文件名无效");
             }
-            String path = ATTACHMENT_DIRECTORY + sessionId + "/" + UUID.randomUUID() + "_" + safeName;
+            String path = AgentManager.resolveAttachmentsRoot()
+                    .resolve(sessionId)
+                    .resolve(UUID.randomUUID() + "_" + safeName)
+                    .toString();
             attachments.add(new ChatAttachment(path, file.getBytes(), imageMediaType(file, safeName)));
         }
         return attachments;

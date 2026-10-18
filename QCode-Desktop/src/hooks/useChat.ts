@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   confirmChatStream,
   fetchSessionMessages,
-  fetchSessions,
+  fetchRecentSessions,
   openChatStream,
   readEventStream,
   stopChat,
@@ -456,7 +456,7 @@ export interface UseChatResult {
   pendingConfirm: PendingConfirmation | null;
   planMode: boolean;
   setPlanMode: (enabled: boolean) => void;
-  loadSessions: () => Promise<void>;
+  loadSessions: () => Promise<Session[]>;
   sendMessage: (text: string, files?: File[], skillName?: string) => Promise<void>;
   confirmTool: (confirmed: boolean) => Promise<void>;
   selectSession: (session: Session, projectId?: string | null) => Promise<void>;
@@ -498,6 +498,8 @@ export function useChat(): UseChatResult {
   const activeProjectIdRef = useRef(activeProjectId);
   const visibleSessionKeyRef = useRef(chatSessionKey(sessionId, activeProjectId));
   const sessionRuntimesRef = useRef(new Map<string, SessionRuntime>());
+  const sessionsRequestRef = useRef<Promise<Session[]> | null>(null);
+  const titleRefreshTimersRef = useRef(new Set<number>());
 
   const updateRuntime = useCallback((key: string, updater: (runtime: SessionRuntime) => SessionRuntime): SessionRuntime => {
     const previous = sessionRuntimesRef.current.get(key) || createSessionRuntime();
@@ -576,17 +578,45 @@ export function useChat(): UseChatResult {
     return project;
   }, []);
 
-  const loadSessions = useCallback(async () => {
+  const loadSessions = useCallback((): Promise<Session[]> => {
+    if (sessionsRequestRef.current) return sessionsRequestRef.current;
     setSessionsLoading(true);
-    try {
-      setSessions(await fetchSessions());
-    } catch (error) {
-      console.warn("加载会话列表失败：", error);
-      setSessions([]);
-    } finally {
-      setSessionsLoading(false);
-    }
+    const request = fetchRecentSessions("", "", 30)
+      .then(({ items }) => {
+        setSessions(items);
+        return items;
+      })
+      .catch((error) => {
+        console.warn("加载会话列表失败：", error);
+        // 刷新失败时保留已有列表，避免侧栏瞬间清空和抖动。
+        return [];
+      })
+      .finally(() => {
+        if (sessionsRequestRef.current === request) sessionsRequestRef.current = null;
+        setSessionsLoading(false);
+      });
+    sessionsRequestRef.current = request;
+    return request;
   }, []);
+
+  const refreshPendingAutoTitle = useCallback((targetSessionId: string, targetProjectId: string | null, initial: Session[]) => {
+    const delays = [500, 1500, 3000, 5000];
+    const poll = (items: Session[], attempt: number) => {
+      const session = items.find((item) => item.sessionId === targetSessionId
+        && (item.projectId || null) === targetProjectId);
+      const roundCount = Number(session?.roundCount);
+      const expectedTitleCount = roundCount === 1 ? 1 : roundCount === 3 ? 2 : 0;
+      const titlePending = Boolean(expectedTitleCount && Number(session?.autoTitleCount || 0) < expectedTitleCount);
+      // doFinally 在 SSE 结束后才更新轮次；第一次固定复查一次，随后只在标题尚未生成时继续。
+      if ((attempt > 0 && session && !titlePending) || attempt >= delays.length) return;
+      const timer = window.setTimeout(async () => {
+        titleRefreshTimersRef.current.delete(timer);
+        poll(await loadSessions(), attempt + 1);
+      }, delays[attempt]);
+      titleRefreshTimersRef.current.add(timer);
+    };
+    poll(initial, 0);
+  }, [loadSessions]);
 
   const loadSessionMessages = useCallback(async (targetSessionId: string, targetProjectId?: string | null) => {
     const key = chatSessionKey(targetSessionId, targetProjectId);
@@ -958,8 +988,9 @@ export function useChat(): UseChatResult {
     const loadChanges = fetchSessionChanges(targetSessionId, targetProjectId)
       .then((changes) => updateRuntime(key, (runtime) => ({ ...runtime, messages: withLatestChangeSummary(runtime.messages, messageId, changeSummaryBlock(messageId, changes)) })))
       .catch(() => { /* 变更摘要失败不影响对话完成。 */ });
-    await Promise.all([loadSessions(), loadProjects(), loadChanges]);
-  }, [loadProjects, loadSessions, updateRuntime]);
+    const [latestSessions] = await Promise.all([loadSessions(), loadChanges]);
+    refreshPendingAutoTitle(targetSessionId, targetProjectId, latestSessions);
+  }, [loadSessions, refreshPendingAutoTitle, updateRuntime]);
 
   const sendMessage = useCallback(async (text: string, files: File[] = [], skillName?: string) => {
     const value = text.trim();
@@ -1002,7 +1033,7 @@ export function useChat(): UseChatResult {
       const response = await openChatStream(value, targetSessionId, controller.signal, targetProjectId, targetPlanMode, skillName, files);
       if (!response.ok) throw new Error(`请求失败（${response.status}）`);
       // 会话在服务端建立后立即刷新侧栏，切到其他项目时仍能从侧栏返回这个运行中的会话。
-      void Promise.all([loadSessions(), loadProjects()]);
+      void loadSessions();
       await consumeStream(key, response, assistantMessage, contentRef);
       if (!contentRef.value && !sessionRuntimesRef.current.get(key)?.pendingConfirm) appendAssistantText(key, assistantMessage.id, "服务端没有返回消息。", contentRef);
     } catch (error) {
@@ -1013,7 +1044,7 @@ export function useChat(): UseChatResult {
     } finally {
       await finishRequest(key, targetSessionId, targetProjectId, controller, assistantMessage.id);
     }
-  }, [appendAssistantText, consumeStream, finishRequest, loadProjects, loadSessions, updateRuntime]);
+  }, [appendAssistantText, consumeStream, finishRequest, loadSessions, updateRuntime]);
 
   const confirmTool = useCallback(async (confirmed: boolean) => {
     const targetSessionId = sessionIdRef.current;
@@ -1097,18 +1128,25 @@ export function useChat(): UseChatResult {
   }, [showRuntime]);
 
   const renameSessionAction = useCallback(async (targetSessionId: string, title: string, projectId?: string | null) => {
-    await renameSession(targetSessionId, title, projectId);
+    const renamed = await renameSession(targetSessionId, title, projectId);
     if (sessionIdRef.current === targetSessionId && activeProjectIdRef.current === (projectId || null)) setSessionTitle(title);
-    await Promise.all([loadSessions(), loadProjects()]);
-  }, [loadProjects, loadSessions]);
+    setProjects((current) => current.map((project) => project.projectId === projectId ? {
+      ...project,
+      sessions: project.sessions.map((session) => session.sessionId === targetSessionId ? { ...session, ...renamed } : session)
+    } : project));
+    await loadSessions();
+  }, [loadSessions]);
 
   const deleteSessionAction = useCallback(async (targetSessionId: string, projectId?: string | null) => {
     await removeSession(targetSessionId, projectId);
     sessionRuntimesRef.current.get(chatSessionKey(targetSessionId, projectId))?.controller?.abort();
     persistPlanMode(targetSessionId, projectId, false);
     if (sessionIdRef.current === targetSessionId && activeProjectIdRef.current === (projectId || null)) newChat();
-    await Promise.all([loadSessions(), loadProjects()]);
-  }, [loadProjects, loadSessions, newChat]);
+    setProjects((current) => current.map((project) => project.projectId === projectId
+      ? { ...project, sessions: project.sessions.filter((session) => session.sessionId !== targetSessionId) }
+      : project));
+    await loadSessions();
+  }, [loadSessions, newChat]);
 
   const renameProjectAction = useCallback(async (project: Project, name: string) => {
     await updateProject(project.projectId, { ...project, name });
@@ -1155,10 +1193,8 @@ export function useChat(): UseChatResult {
         updateRuntime(visibleSessionKeyRef.current, (runtime) => ({ ...runtime, messages: createDemoMessages(), initialized: true }));
         return;
       }
-      const currentProjects = await loadProjects();
-      await loadSessions();
+      const [currentProjects, currentSessions] = await Promise.all([loadProjects(), loadSessions()]);
       if (!cancelled) {
-        const currentSessions = await fetchSessions().catch(() => []);
         const currentProject = currentProjects.find((project) => project.projectId === activeProjectIdRef.current);
         const currentSession = currentSessions.find((session) => session.sessionId === sessionIdRef.current && (session.projectId || null) === activeProjectIdRef.current)
           || currentProject?.sessions.find((session) => session.sessionId === sessionIdRef.current);
@@ -1174,6 +1210,8 @@ export function useChat(): UseChatResult {
     return () => {
       cancelled = true;
       sessionRuntimesRef.current.forEach((runtime) => runtime.controller?.abort());
+      titleRefreshTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      titleRefreshTimersRef.current.clear();
     };
   }, [loadProjects, loadSessionMessages, loadSessions, updateRuntime]);
 

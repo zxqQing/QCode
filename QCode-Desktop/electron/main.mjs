@@ -81,6 +81,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: "#f4f5f7",
+    icon: join(__dirname, "assets", "icon.png"),
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -131,6 +132,7 @@ ipcMain.handle("qcode:open-session-file", async (_event, args) => {
 });
 
 app.whenReady().then(async () => {
+  app.setAppUserModelId("com.qcode.desktop");
   const backendStarted = startBackend();
   if (backendStarted) await waitForBackend();
   createWindow();
